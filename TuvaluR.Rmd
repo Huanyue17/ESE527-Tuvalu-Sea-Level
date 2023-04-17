@@ -1,0 +1,423 @@
+---
+title: "ESE527 Tuvalu"
+author: "Huanyue Liao"
+date: "2023-03-18"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+library(forecast) 
+#install.packages("fpp2")
+library(fpp2)
+```
+
+# Data Preprocessing
+
+```{r}
+file_name1 = "monthly sea level.txt"
+file_name2 = "monthly air temp.txt"
+file_name3 = "monthly water temp.txt"
+file_name4 = "dailySL1993-2018.csv"
+file_name5 = "dailySL1977-1999.csv"
+
+sl_monthly_df = read.csv(file_name1, header = TRUE, sep = "", skip = 6)
+sl_monthly_df
+at_monthly_df = read.csv(file_name2, header = TRUE, sep = "", skip = 6)
+wt_monthly_df = read.csv(file_name3, header = TRUE, sep = "", skip = 6)
+sl_daily_df_93_18 = read.csv(file_name4, header=FALSE, sep = ",")
+sl_daily_df_77_99 = read.csv(file_name5, header=FALSE, sep = ",")
+
+at_monthly_df
+wt_monthly_df
+```
+
+## 1.Clear Dataset:
+
+### - Find NaN data and omit them
+
+```{r}
+## find NaN data
+find_na <- function(dataset, method) {
+  nullRows = is.na(dataset['Mean'])&is.na(dataset['Maximum'])&is.na(dataset['Minimum'])
+  omit_dataset = dataset[!nullRows,]
+  if (method == "findNA") return (dataset[nullRows,])
+  if (method == "omitNA") return (omit_dataset)
+}
+
+sl_missing = find_na(sl_monthly_df,"findNA")[c("Year", "Mth")]
+at_missing = find_na(at_monthly_df,"findNA")[c("Year", "Mth")]
+wt_missing = find_na(wt_monthly_df,"findNA")[c("Year", "Mth")]
+
+## write missing dataframe into Excel
+#library(openxlsx)
+#names <- list('Sea Level' = sl_missing, 'Air Temp' = at_missing, 'Water Temp' = wt_missing)
+#write.xlsx(names, file = 'missing data.xlsx')
+
+## omit NaN data
+sl_monthly_df = find_na(sl_monthly_df,"omitNA")
+at_monthly_df = find_na(at_monthly_df,"omitNA")
+wt_monthly_df = find_na(wt_monthly_df,"omitNA")
+
+sl_monthly_df
+at_monthly_df
+wt_monthly_df
+```
+
+### - Consider about El-Niño
+
+**Strong El-Niño: 1997-1998,**
+
+**Weaker El-Niño: 2002-2003.**
+
+El Niño and La Niña are **climate patterns** in the Pacific Ocean that can affect weather worldwide. El-Niño condition has a strong effect on marine life off the Pacific coast. So we want to create a new dataset to store the dataset
+
+```{r}
+elnino_years = c(1997,1998)
+omit_elnino <- function(dataset, years) {
+  return(dataset[!(dataset$Year %in% years),])
+}
+omit_elnino2 <- function(dataset, yr) {
+  return(dataset[(dataset$Year > yr),])
+}
+
+sl_monthly_df_elnino = omit_elnino2(sl_monthly_df, 1998)
+at_monthly_df_elnino =  omit_elnino2(at_monthly_df, 1998)
+wt_monthly_df_elnino =  omit_elnino2(wt_monthly_df, 1998)
+
+sl_monthly_df_elnino
+at_monthly_df_elnino
+wt_monthly_df_elnino
+```
+
+### - Transform 'Mean' values of datasets into time series(ts):
+
+### - Use the Kalman Filter to fill the missing data
+
+-   Ignore the missing values
+-   Filling in the missing values: expand your date index to include the missing observations, and use `na.approx` from `zoo` to fill in the missing values via interpolation.
+
+```{r}
+## Filling the missing data in dataframe df
+# df <- data.frame{Date:xxxx, Mean:xxxx}
+# type: "raw": return zoo ts with NaN; "filled": return zoo ts with replacement.
+#       "kalman": return Missing Value Imputation by Kalman Smoothing and State Space Models
+
+fill_zoo <- function(df, type) {
+  alldates <- seq.Date(
+  min(df$Date), 
+  max(df$Date),
+  "month"
+  )
+  allvalues <- merge(
+    x=data.frame(Date=alldates),
+    y=df,
+    all.x=TRUE
+  )
+  zoovalues <- zoo(allvalues$Mean,allvalues$Date)
+  approxvalues <- na.approx(zoovalues)
+  kalmanvalues <- na_kalman(zoovalues, model = "StructTS", smooth = TRUE, nit = -1, maxgap = Inf)
+  if (type == "raw") return (zoovalues)
+  if (type == "filled") return(approxvalues)
+  if (type == "kalman") return (kalmanvalues)
+}
+```
+
+```{r}
+#install.packages('imputeTS')
+library(xts)
+library(zoo)
+library(imputeTS)
+## clear NaN dataset
+sl_monthly_df$Date <- as.Date(as.yearmon(paste(sl_monthly_df$Year, sl_monthly_df$Mth, sep = "-")))
+at_monthly_df$Date <- as.Date(as.yearmon(paste(at_monthly_df$Year, at_monthly_df$Mth, sep = "-")))
+wt_monthly_df$Date <- as.Date(as.yearmon(paste(wt_monthly_df$Year, wt_monthly_df$Mth, sep = "-")))
+
+## Omit Ei Nino dataset
+sl_monthly_df_elnino$Date <- as.Date(as.yearmon(paste(sl_monthly_df_elnino$Year, sl_monthly_df_elnino$Mth, sep = "-")))
+at_monthly_df_elnino$Date <- as.Date(as.yearmon(paste(at_monthly_df_elnino$Year, at_monthly_df_elnino$Mth, sep = "-")))
+wt_monthly_df_elnino$Date <- as.Date(as.yearmon(paste(wt_monthly_df_elnino$Year, wt_monthly_df_elnino$Mth, sep = "-")))
+
+
+# Create new dataframes only have two columns: Date, Mean
+sl_mon_mean = sl_monthly_df[c("Date", "Mean")]
+at_mon_mean = at_monthly_df[c("Date", "Mean")]
+wt_mon_mean = wt_monthly_df[c("Date", "Mean")]
+sl_mon_el_mean = sl_monthly_df_elnino[c("Date", "Mean")]
+at_mon_el_mean = at_monthly_df_elnino[c("Date", "Mean")]
+wt_mon_el_mean = wt_monthly_df_elnino[c("Date", "Mean")]
+
+## Raw time series data
+raw_sl_mon = fill_zoo(sl_mon_mean, "raw")
+raw_at_mon = fill_zoo(at_mon_mean, "raw")
+raw_wt_mon = fill_zoo(wt_mon_mean, "raw")
+raw_sl_mon_el = fill_zoo(sl_mon_el_mean, "raw")
+raw_at_mon_el = fill_zoo(at_mon_el_mean, "raw")
+raw_wt_mon_el = fill_zoo(wt_mon_el_mean, "raw")
+
+## Filling time series data
+approx_sl_mon = fill_zoo(sl_mon_mean, "filled")
+approx_at_mon = fill_zoo(at_mon_mean, "filled")
+approx_wt_mon = fill_zoo(wt_mon_mean, "filled")
+approx_sl_mon_el = fill_zoo(sl_mon_el_mean, "filled")
+approx_at_mon_el = fill_zoo(at_mon_el_mean, "filled")
+approx_wt_mon_el = fill_zoo(wt_mon_el_mean, "filled")
+
+## Filling time series data with Kalman filter
+approx_sl_mon_el2 = fill_zoo(sl_mon_el_mean, "kalman")
+approx_at_mon_el2 = fill_zoo(at_mon_el_mean, "kalman")
+approx_wt_mon_el2 = fill_zoo(wt_mon_el_mean, "kalman")
+
+approx_sl_mon_ts = ts(approx_sl_mon, start=c(1993,3), frequency = 12)
+approx_at_mon_ts = ts(approx_at_mon, start=c(1993,3), frequency = 12)
+approx_wt_mon_ts = ts(approx_wt_mon, start=c(1993,3), frequency = 12)
+approx_sl_mon_el_ts = ts(approx_sl_mon_el, start=c(1999,1), frequency = 12)
+approx_at_mon_el_ts = ts(approx_at_mon_el, start=c(1999,1), frequency = 12)
+approx_wt_mon_el_ts = ts(approx_wt_mon_el, start=c(1999,1), frequency = 12)
+approx_sl_mon_el_ts2 = ts(approx_sl_mon_el2, start=c(1999,1), frequency = 12)
+approx_at_mon_el_ts2 = ts(approx_at_mon_el2, start=c(1999,1), frequency = 12)
+approx_wt_mon_el_ts2 = ts(approx_wt_mon_el2, start=c(1999,1), frequency = 12)
+
+#plot(na.interp(raw_sl_mon_el, lambda = 'auto'))
+plot(approx_sl_mon_el_ts, main="Simple filling: sea level")
+plot(approx_at_mon_el_ts, main="Simple filling: air temp ")
+plot(approx_wt_mon_el_ts, main="Simple filling: water temp")
+plot(approx_sl_mon_el_ts2, main="Kalman filling: sea level")
+plot(approx_at_mon_el_ts2, main="Kalman filling: air temp ")
+plot(approx_wt_mon_el_ts2, main="Kalman filling: water temp")
+```
+
+#### Raw Plots
+
+```{r}
+plot_ts <- function(tsdat, title, ylab, xlab) {
+  autoplot(tsdat) +
+    ggtitle(title) +
+    ylab(ylab) +
+    xlab(xlab)
+    
+}
+plot_ts(raw_sl_mon, "Raw Monthly Sea Level Data", "Meter", "Year")
+plot_ts(raw_at_mon, "Raw Monthly Air Temperature Data", "Celsius (°C)", "Year")
+plot_ts(raw_wt_mon, "Raw Monthly Water Temperature Data", "Celsius (°C)", "Year")
+plot_ts(raw_sl_mon_el, "Raw Monthly Sea Level Data Except Strong El-Niño", "Meter", "Year")
+plot_ts(raw_at_mon_el, "Raw Monthly Air Temperature Data Except Strong El-Niño", "Celsius (°C)", "Year")
+plot_ts(raw_wt_mon_el, "Raw Monthly Water Temperature Data Except Strong El-Niño", "Celsius (°C)", "Year")
+```
+
+#### Filled data plots
+
+```{r}
+plot_ts(approx_sl_mon, "Preprocssing Monthly Sea Level Data", "Meter", "Year")
+plot_ts(approx_at_mon, "Preprocssing Monthly Air Temperature Data", "Celsius (°C)", "Year")
+plot_ts(approx_wt_mon, "Preprocssing Monthly Water Temperature Data", "Celsius (°C)", "Year")
+plot_ts(approx_sl_mon_el2, "Preprocssing Monthly Sea Level Data Except Strong El-Niño", "Meter", "Year")
+plot_ts(approx_at_mon_el2, "Preprocssing Monthly Air Temperature Data Except Strong El-Niño", "Celsius (°C)", "Year")
+plot_ts(approx_wt_mon_el2, "Preprocssing Monthly Water Temperature Data Except Strong El-Niño", "Celsius (°C)", "Year")
+```
+
+### - Check if a time series is stationary: confirm the stationarity of the dataset
+
+-   We use Dickey-Fuller test using `adf.test` function of `tseries` package. Augmented Dickey-Fuller (ADF) t-statistic test to find if the series has a unit root (a series with a trend line will have a unit root and result in a large p-value).
+
+```{r}
+options(warn=-1)
+library(tseries)
+
+adf.test(approx_sl_mon_el_ts2)
+
+adf.test(approx_at_mon_el_ts2)
+
+adf.test(approx_wt_mon_el_ts2)
+```
+
+### Check ACF
+
+-   Autocorrelation Function (ACF) Identify if correlation at different time lags goes to 0. Just as correlation measures the extent of a linear relationship between two variables, autocorrelation measures the linear relationship between lagged values of a time series.
+
+```{r}
+library(cowplot)
+#library(patchwork)
+iris1 <- autoplot(approx_sl_mon_ts)+
+  ggtitle("Monthly Sea Level Data") +
+  ylab("meter") +
+  xlab("Year")
+
+## Seasonality Plot
+#ggseasonplot(approx_sl_mon_ts, year.labels=TRUE, year.labels.left=TRUE) +
+#  ylab("meter") +
+#  ggtitle("Seasonal plot: Monthly Sea Level")
+
+
+ggAcf(approx_sl_mon_el_ts2)+
+  ggtitle("Autocorrelation for monthly sea level (m) except Strong El-Niño")
+
+ggAcf(approx_at_mon_el_ts2)+
+  ggtitle("Autocorrelation for monthly air temperature(°C) except Strong El-Niño")
+
+ggAcf(approx_wt_mon_el_ts2)+
+  ggtitle("Autocorrelation for monthly water temperature(°C) except Strong El-Niño")
+```
+
+Monthly sea level is not stationary, since most lags exceed the confidence interval of the ACF (blue dashed line).
+
+## STL model
+
+-   t.window controls wiggliness of trend component.
+
+-   s.window controls variation on seasonal component. These control how rapidly the trend-cycle and seasonal components can change. Smaller values allow for more rapid changes.
+
+```{r stlagain, echo=TRUE, warning=FALSE, fig.width=8, fig.height=4}
+sl_el_fit <- stl(approx_sl_mon_el_ts2, t.window=13, s.window="periodic", robust=TRUE)
+autoplot(sl_el_fit) +
+  ggtitle("STL decomposition of monthly sea level (m) except strong El Niño.")
+
+at_el_fit <- stl(approx_at_mon_el_ts2, t.window=13, s.window="periodic", robust=TRUE)
+autoplot(at_el_fit) +
+  ggtitle("STL decomposition of monthly air temperature (°C) except strong El Niño.")
+
+wt_el_fit <- stl(approx_wt_mon_el_ts2, t.window=13, s.window="periodic", robust=TRUE)
+autoplot(wt_el_fit) +
+  ggtitle("STL decomposition of monthly water temperature (°C) except strong El Niño.")
+```
+
+```{r mstl, fig.width=8, fig.height=4}
+approx_sl_mon_el_ts2 %>% mstl() %>% autoplot()
+
+```
+
+### Find the outliers by using STL decomposition:
+
+```{r}
+plot_resid <- function(res) {
+  mu = mean(res)
+  sd = sd(res)
+  plot(res) + 
+  abline(h = c(mu-3*sd, mu+3*sd), col = c("blue","blue"), lty=c(2,2))
+}
+```
+
+```{r}
+## calculate the reminders in each STL decomposition
+sl_el_resid <- remainder(sl_el_fit)
+at_el_resid <- remainder(at_el_fit)
+wt_el_resid <- remainder(wt_el_fit)
+
+plot_resid(sl_el_resid)
+plot_resid(at_el_resid)
+plot_resid(wt_el_resid)
+```
+
+```{r}
+tsoutliers(raw_sl_mon_el)
+tsoutliers(raw_at_mon_el)
+tsoutliers(raw_wt_mon_el)
+
+tsoutliers(na.approx(raw_sl_mon_el))
+tsoutliers(na.approx(raw_at_mon_el))
+tsoutliers(na.approx(raw_wt_mon_el))
+```
+
+#### Analyze stationary for residual first
+
+If stationary: use AR/ARMA (Auto-regressive model) (auto-regressive moving average model)
+
+**Why white noise residuals are desired:**
+
+It is a general principle of time series models (including ARMA) that you would like to capture all systematic dynamics in the data. This means, every variation that can be explained by input variables, auto-regression, moving-average etc. should be explained.
+
+If after your model building, the residuals are purely random, and are not correlated with each other i.e. show no systematic pattern, then you are generally satisfied, because you reached a point where you cannot go further. White noise is completely unpredictable.
+
+**And a bit more pragmatic answer:**
+
+The residuals of an ARMA process are by definition white noise. If you fit your data to an ARMA model, and you see that residuals are white noise, then this indicates you that the model fits the data well.
+
+**Ljung-Box test for ARMA model residual diagnostics**:
+
+For both Q and Q∗, the results are not significant (i.e. the p-values are relatively large). Thus, we can conclude that the residuals are not distinguishable from a white noise series.
+- **The Ljung-Box test uses the following hypotheses:**
+
+-   **H0: The residuals are independently distributed.**
+
+-   **HA: The residuals are not independently distributed; they exhibit serial correlation.**
+
+    **Rejection Region**
+
+    The test statistic *Q\** follows a chi-square distribution with *h* degrees of freedom; that is, Q\*\~ X^2^(h).
+
+    We reject the null hypothesis and say that the residuals of the model are not independently distributed if Q\* \> X^2^~1-α,\ h~
+
+Ideally, we would like to be unable to reject the null hypothesis. That is, we would like to see a *p-value greater than 0.05* because this means the residuals for our time series model are independent, which is often an assumption we make when creating a model. And a small value of Q\*, which suggests that the auto correlations com from a WN series.
+The large values of Q∗ suggest that the autocorrelations do not come from a white noise series (WN). The p-value is the probability of getting a value as large as or larger than that observed under the null hypothesis that the true innovations are independent. Therefore a small p-value is an evidence against independence.
+
+```{r}
+## fit the residuals into ARMA model to check the new residual series is whether WN or not
+arma.fit.sl.resid <- auto.arima(sl_el_resid, max.order = 12, max.d=0, ic="aic", trace = T)
+## ARIMA(2,0,0) -> ARMA(2,0)
+plot(residuals(arma.fit.sl.resid), main="Residuals for ARMA(2,0) of sea level")
+stats::qqnorm(residuals(arma.fit.sl.resid), main = "QQNORM: sea level")
+stats::qqline(residuals(arma.fit.sl.resid))
+
+arma.fit.at.resid <- auto.arima(at_el_resid, max.order = 12, max.d=0, ic="aic", trace = T)
+## ARIMA(0,0,1) -> ARMA(0,1)
+plot(residuals(arma.fit.at.resid), main="Residuals for ARMA(0,1) of air temperature")
+stats::qqnorm(residuals(arma.fit.at.resid), main = "QQNORM: air temperature")
+stats::qqline(residuals(arma.fit.at.resid))
+
+arma.fit.wt.resid <- auto.arima(wt_el_resid, max.order = 12, max.d=0, ic="aic", trace = T)
+## ARIMA(2,0,1) -> ARMA(2,1)
+plot(residuals(arma.fit.wt.resid), main="Residuals for ARMA(2,1) of water temperature")
+stats::qqnorm(residuals(arma.fit.wt.resid), main="QQNORM: water temperature")
+stats::qqline(residuals(arma.fit.wt.resid))
+
+checkresiduals(arma.fit.sl.resid)
+checkresiduals(arma.fit.at.resid)
+checkresiduals(arma.fit.wt.resid)
+```
+
+From the Q\* values and large p-values(all \>0.05), we can conclude that Sea level/ Water Temperature/ Air Temperature STL residuals series are not distinguishable from a white noise series (WN), which means residuals are independently distributed.
+
+#### STL Plots
+
+```{r stlagain, echo=TRUE, warning=FALSE, fig.width=8, fig.height=4}
+#install.packages("stlplus")
+library(stlplus)
+# stlplus accepts Na ts data
+alldates <- seq.Date(
+  min(sl_monthly_df_elnino$Date), 
+  max(sl_monthly_df_elnino$Date),
+  "month"
+  )
+stlplus_plot <- function(tsdat, n_s, title, xlab, ylab, res) {
+  monthNames <- c("Ja", "F", "Mr", "Ap", "Ma", "Jn", "Jl", "Au", "S", "O", "N", "D")
+  # the important parameter is n.p, the number of measurements in a full period of   seasonal behavior. Since we are looking for a yearly effect, n.p should equal 12.
+  stlMonthly <- stlplus(tsdat, t=alldates, n.p = 12, s.window=n_s)
+  #, sub.start=1, sub.labels = monthNames
+  
+  if (res == "s") plot_seasonal(stlMonthly)
+  else if (res == "t") plot_trend(stlMonthly)
+  else if (res == "a") plot(stlMonthly, main=title, xlab=xlab, ylab=ylab)
+}
+
+p1 <- stlplus_plot(approx_wt_mon_el_ts2, n_s=13, title="STL decomposition of monthly sea level (m) except strong El Niño.", xlab="Year", ylab="monthly sea level (m)", "a")
+stlplus_plot(approx_sl_mon_el_ts2, n_s=13, title="STL decomposition of monthly sea level (m) except strong El Niño.", xlab="Year", ylab="monthly sea level (m)", "a")
+
+stlplus_plot(approx_at_mon_el_ts2, n_s=13, title="STL decomposition of monthly air temperature (°C) except strong El Niño.", xlab="Year", ylab="monthly air temperature (°C)", "a")
+
+stlplus_plot(approx_wt_mon_el_ts2, n_s=13, title="STL decomposition of water temperature (°C) except strong El Niño.", xlab="Year", ylab="monthly water temperature (°C)", "a")
+```
+
+### Forecasting with decomposition
+
+```{r}
+sl_el_fit %>% forecast(method="naive") %>%
+  autoplot() + ylab("Sea Level (m)")
+at_el_fit %>% forecast(method="naive") %>%
+  autoplot() + ylab("Air Temperature (°C)")
+wt_el_fit %>% forecast(method="naive") %>%
+  autoplot() + ylab("Water Temperature (°C)")
+
+```
