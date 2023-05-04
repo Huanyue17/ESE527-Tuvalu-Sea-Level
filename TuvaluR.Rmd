@@ -381,8 +381,8 @@ acf(sl_el_resid)
 acf(at_el_resid)
 acf(wt_el_resid)
 ```
-From ADF test, the residuals are stationary.
-• The plot shows significant correlations in the remainder part of data. It also seems that it does not vanish after a finite number of steps so that we do not attempt to fit a MA(q) model but try an ARMA(p,q) model instead. Except air temperature, we use the ARIMA model.
+
+From ADF test, the residuals are stationary. • The plot shows significant correlations in the remainder part of data. It also seems that it does not vanish after a finite number of steps so that we do not attempt to fit a MA(q) model but try an ARMA(p,q) model instead. Except air temperature, we use the ARIMA model.
 
 ```{r}
 ## fit the residuals into ARMA model to check the new residual series is whether WN or not
@@ -478,9 +478,6 @@ summary(at_stl_pred)
 summary(wt_stl_pred)
 ```
 
-
-
-
 ##5. Plot a trendline on original data
 
 ```{r}
@@ -504,8 +501,8 @@ boxplot(at_train~cycle(at_train), xlab="Date", ylab = "Air Temperature", main = 
 boxplot(wt_train~cycle(wt_train), xlab="Date", ylab = "Water Temperature", main = "Monthly water temp boxplot from 1999/01-2018/04")
 ```
 
-From the above plot, you can see that the sea level goes higher in January, February, March, and April as compared to the other months of the years.
-   ## 6. Seasonality plots
+From the above plot, you can see that the sea level goes higher in January, February, March, and April as compared to the other months of the years. \## 6. Seasonality plots
+
 ```{r}
 sl_el_season <- sl_el_fit$time.series[,1]
 at_el_season <- at_el_fit$time.series[,1] 
@@ -518,62 +515,157 @@ autoplot(wt_el_season, main="Seasonality of monthly water temperature", ylab="wa
 ```
 
 ## 7. ARIMAX model
-$$sea\ level: W(t)=T_s(t)+S_s(t)+R_s(t)$$
-$$water\ temp:T_w(t)=T_w(t)+S_w(t)+R_w(t)$$
-Finding causal relationship between two sets of time series data $T_w(t),T_o(t)$. 
 
-Suppose that $T_o(t) \rightarrow T_w(t)$, as same as $T_w(t)$~$T_o(t)$.
+### 7.1 Inferring causality in time series data: determine if there ia any causal relationship between two trends🧸
+
+### 7.1.1 Estimate a time series Y and check the p-value of parameters for ARIMAX model
+
+ARIMAX Equation: $$P_t=c+\beta X+\Phi_1P_{t-1}+\theta_1\epsilon_{t-1}+\epsilon_t $$ where $\epsilon$ is error term, $\Phi_1$ and $\beta_1$ are coefficient parameters, $X$ is the additional term.
 
 ```{r}
+library(lmtest)
 sl_el_trend <- sl_el_fit$time.series[,2]
 at_el_trend <- at_el_fit$time.series[,2] 
 wt_el_trend <- wt_el_fit$time.series[,2]
 
+#length(sl_el_trend)=232
+## Let P[t-1]=1, c=1, beta=1, Phi_1=1, theta_1=1
+err <- rnorm(n=232, mean = 0, sd = 0.5)
+
+#Y_causal <- numeric(3)
+#Y_causal <- 1 + 2*wt_el_trend + 3 * sl_el_trend[1:231] + 4*err[1:231] + err[2:232]
+Y_causal <- numeric(232)
+Y_causal[1] = 1  
+for (i in 2:232) {
+  Y_causal[i] <- 0.1 + 4*wt_el_trend[i] + 0.5 * Y_causal[i-1] + 2*err[i-1] + err[i]
+}
+
+arimax_causal <- auto.arima(Y_causal, xreg=wt_el_trend)
+arimax_causal_inverse <- auto.arima(wt_el_trend, xreg=Y_causal)
+
+coeftest(arimax_causal) #ARIMA(1,0,2)
+coeftest(arimax_causal_inverse) #ARIMA(0,1,0)(0,0,1)[12]
+arimax_causal
+arimax_causal_inverse
+```
+
+### 7.2.1 $T_w(t) \rightarrow T_s(t)$
+
+$$sea\ level: W(t)=T_s(t)+S_s(t)+R_s(t)$$ $$water\ temp:T_w(t)=T_w(t)+S_w(t)+R_w(t)$$ Finding causal relationship between two sets of time series data $T_s(t),T_w(t)$.
+
+Suppose that $T_w(t) \rightarrow T_s(t)$, as same as $T_s(t)$\~$T_w(t)$.
+
+```{r}
 autoplot(sl_el_trend, main="Trend of monthly sea level", ylab="sea level (m)")
 autoplot(at_el_trend, main="Trend of monthly air temperature", ylab="air temp (°C)")
 autoplot(wt_el_trend, main="Trend of monthly water temperature", ylab="water temp (°C)")
 ```
 
-### Compute MAPE, RMSE
 ```{r}
 #library(TSA)
 library(forecast)
 #arimax(x, order = c(0, 0, 0), seasonal = list(order = c(0, 0, 0), period = NA),xreg = NULL, include.mean = TRUE, transform.pars = TRUE, fixed = NULL, init = NULL, method = c("CSS-ML", "ML", "CSS"), n.cond, optim.control = list(),kappa = 1e+06, io = NULL, xtransf, transfer = NULL)
 
+
 arimax_w_s_fit <- auto.arima(sl_el_trend, xreg=wt_el_trend)
+arimax_s_w_fit <- auto.arima(wt_el_trend, xreg=sl_el_trend)
 
 ## ARIMAX: ARIMA(2,1,4)
-summary(arimax_w_s_fit)
+coeftest(arimax_w_s_fit)
+coeftest(arimax_s_w_fit)
 
-arimax_pred <- forecast(arimax_w_s_fit, xreg=wt_test, h=58)
-arimax_pred
 ```
+
+### 7.2.2 $T_a \rightarrow T_s$
+
+$$air\ temp:T_a(t)=T_a(t)+S_a(t)+R_a(t)$$ Finding causal relationship between two sets of time series data $T_s(t),T_a(t)$.
+
+Suppose that $T_a(t) \rightarrow T_s(t)$, as same as $T_s(t)$\~$T_a(t)$.
+
+```{r}
+arimax_a_s_fit <- auto.arima(sl_el_trend, xreg=at_el_trend)
+arimax_s_a_fit <- auto.arima(at_el_trend, xreg=sl_el_trend)
+
+## ARIMAX: ARIMA(0,0,2)(0,0,1)[12]
+coeftest(arimax_a_s_fit)
+coeftest(arimax_s_a_fit) ## ARIMA(1,1,0)(2,0,1)[12]
+
+arimax_as_pred <- forecast(arimax_a_s_fit, xreg=at_test, h=58)
+arimax_as_pred
+```
+
 ```{r}
 ## Calculate MAPE(Mean Absolute Percentage Error)
-cat("T_s(s) ~ T_w(t) ARIMAX MAPE: ", MAPE(arimax_pred$mean,sl_test[1:58]),"\n")
+cat("T_s(s) ~ T_a(t) ARIMAX MAPE: ", MAPE(arimax_as_pred$mean,sl_test[1:58]),"\n")
 
 ## Calculate RMSE(Root Mean Square Error)
-cat("T_s(s) ~ T_w(t) ARIMAX RMSE: ", rmse(arimax_pred$mean,sl_test[1:58]),"\n")
-```
+cat("T_s(s) ~ T_a(t) ARIMAX RMSE: ", rmse(arimax_as_pred$mean,sl_test[1:58]),"\n")
 
-```{r}
-plot(arimax_pred,xlab="Time", ylab="Sea Level (m)", main="ARIMAX model of Sea Level Trend", ylim=c(2,2.3), col='blue')
+plot(arimax_as_pred,xlab="Time", ylab="Sea Level(m)", main="ARIMAX model of Sea Level Trend", ylim=c(2,2.3), col='blue')
 lines(sl_test, col='red')
 abline(v=2018.333, lty=2, lwd=2)
 legend("topleft", c("ARIMAX predicted", "Actual"), lty=c(1,1), col=c("blue", "red"), bty="n")
-```
-### Using ARIMAX trend model to forecast the sea level
-```{r}
-pred_train1 <- arimax_pred$fitted+sl_el_season
-plot(pred_train1, col="blue", ylim=c(1.8,2.25), ylab="Sea level", main="Forecast sea level by trend ARIMAX model")
+
+## Using ARIMAX trend model to forecast the sea level
+pred_train1 <- arimax_as_pred$fitted+sl_el_season
+plot(pred_train1, col="blue", ylim=c(1.8,2.25), ylab="Sea level (m)", main="Forecast sea level by trend ARIMAX model")
 lines(sl_train, col="red")
 legend("topleft", c("ARIMAX predicted", "Actual"), lty=c(1,1), col=c("blue", "red"), bty="n")
 
 ## Calculate MAPE(Mean Absolute Percentage Error)
-cat("T_s(s) ~ T_w(t) ARIMAX MAPE for training dataset sea level: ", MAPE(pred_train1,sl_train),"\n")
+cat("T_s(s) ~ T_a(t) ARIMAX MAPE for training dataset sea level: ", MAPE(pred_train1,sl_train),"\n")
 
 ## Calculate RMSE(Root Mean Square Error)
-cat("T_s(s) ~ T_w(t) ARIMAX RMSE for training dataset sea level: ", rmse(pred_train1,sl_train),"\n")
+cat("T_s(s) ~ T_a(t) ARIMAX RMSE for training dataset sea level: ", rmse(pred_train1,sl_train),"\n")
 ```
 
+### 7.2.3 $T_a + T_w \rightarrow T_s$
 
+```{r}
+awt_el_trend <- cbind(at_el_trend,wt_el_trend)
+arimax_aw_s_fit <- auto.arima(sl_el_trend, xreg=awt_el_trend)
+
+coeftest(arimax_aw_s_fit)
+
+arimax_aws_pred <- forecast(arimax_aw_s_fit, xreg=cbind(at_test,wt_test), h=58)
+arimax_aws_pred
+```
+
+```{r}
+## Calculate MAPE(Mean Absolute Percentage Error)
+cat("T_s(s) ~ T_a(t)+T_w(t) ARIMAX MAPE: ", MAPE(arimax_aws_pred$mean,sl_test[1:58]),"\n")
+
+## Calculate RMSE(Root Mean Square Error)
+cat("T_s(s) ~ T_a(t)+T_w(t) ARIMAX RMSE: ", rmse(arimax_aws_pred$mean,sl_test[1:58]),"\n")
+
+plot(arimax_aws_pred,xlab="Time", ylab="Sea Level (m)", main="ARIMAX model of Sea Level Trend", ylim=c(2,2.3), col='blue')
+lines(sl_test, col='red')
+abline(v=2018.333, lty=2, lwd=2)
+legend("topleft", c("ARIMAX predicted", "Actual"), lty=c(1,1), col=c("blue", "red"), bty="n")
+
+## Using ARIMAX trend model to forecast the sea level
+pred_train3 <- arimax_aws_pred$fitted+sl_el_season
+plot(pred_train3, col="blue", ylim=c(1.8,2.25), ylab="Sea level", main="Forecast sea level by trend ARIMAX model")
+lines(sl_train, col="red")
+legend("topleft", c("ARIMAX predicted", "Actual"), lty=c(1,1), col=c("blue", "red"), bty="n")
+
+## Calculate MAPE(Mean Absolute Percentage Error)
+cat("T_s(s) ~ T_a(t)+T_w(t) ARIMAX MAPE for training dataset sea level: ", MAPE(pred_train3,sl_train),"\n")
+
+## Calculate RMSE(Root Mean Square Error)
+cat("T_s(s) ~ T_a(t)+T_w(t) ARIMAX RMSE for training dataset sea level: ", rmse(pred_train3,sl_train),"\n")
+```
+
+```{r}
+arimax_as_pred
+arimax_aws_pred
+
+plot(at_test)
+plot(wt_test)
+
+plot(at_el_trend)
+plot(wt_el_trend)
+
+plot(at_el_trend_ts)
+plot(wt_el_trend_ts)
+```
