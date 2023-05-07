@@ -13,6 +13,7 @@ knitr::opts_chunk$set(echo = TRUE)
 library(forecast) 
 #install.packages("fpp2")
 library(fpp2)
+library(lmtest)
 ```
 
 # Data Preprocessing
@@ -21,14 +22,12 @@ library(fpp2)
 file_name1 = "monthly sea level.txt"
 file_name2 = "monthly air temp.txt"
 file_name3 = "monthly water temp.txt"
-file_name4 = "dailySL1993-2018.csv"
-file_name5 = "dailySL1977-1999.csv"
+
 
 sl_monthly_df = read.csv(file_name1, header = TRUE, sep = "", skip = 6)
 at_monthly_df = read.csv(file_name2, header = TRUE, sep = "", skip = 6)
 wt_monthly_df = read.csv(file_name3, header = TRUE, sep = "", skip = 6)
-sl_daily_df_93_18 = read.csv(file_name4, header=FALSE, sep = ",")
-sl_daily_df_77_99 = read.csv(file_name5, header=FALSE, sep = ",")
+
 
 sl_monthly_df
 at_monthly_df
@@ -211,9 +210,6 @@ plot_ts(raw_wt_mon_el, "Raw Monthly Water Temperature Data Except Strong El-Niñ
 #### Filled data plots
 
 ```{r}
-plot_ts(approx_sl_mon, "Preprocssing Monthly Sea Level Data", "Meter", "Year")
-plot_ts(approx_at_mon, "Preprocssing Monthly Air Temperature Data", "Celsius (°C)", "Year")
-plot_ts(approx_wt_mon, "Preprocssing Monthly Water Temperature Data", "Celsius (°C)", "Year")
 plot_ts(approx_sl_mon_el2, "Preprocssing Monthly Sea Level Data Except Strong El-Niño", "Meter", "Year")
 plot_ts(approx_at_mon_el2, "Preprocssing Monthly Air Temperature Data Except Strong El-Niño", "Celsius (°C)", "Year")
 plot_ts(approx_wt_mon_el2, "Preprocssing Monthly Water Temperature Data Except Strong El-Niño", "Celsius (°C)", "Year")
@@ -292,6 +288,8 @@ wt_test = split_train_test(approx_wt_mon_el_ts2,"test")
 
 ```{r stlagain, echo=TRUE, warning=FALSE, fig.width=8, fig.height=4}
 library(Rsafd)
+library(forecast)
+library(ggplot2)
 sl_el_fit <- stl(sl_train, s.window=12, robust=TRUE)
 
 autoplot(sl_el_fit) +
@@ -513,6 +511,78 @@ autoplot(sl_el_season, main="Seasonality of monthly sea level", ylab="sea level 
 autoplot(at_el_season, main="Seasonality of monthly air temperature", ylab="air temp (°C)")
 autoplot(wt_el_season, main="Seasonality of monthly water temperature", ylab="water temp (°C)")
 ```
+## (DELETE)6. Linear Regression model for sea level
+```{r}
+plot(approx_sl_mon_el_ts2, type = 'n', ylab="Tuvalu Sea Level (m)")
+lines(sl_train)
+lines(sl_test, col = "red")
+abline(v = 2018.333, lty = 2, lwd = 2)
+h = length(sl_test)
+
+# Mean (based on the overall mean value)
+f1 <- meanf(sl_train, h = h)
+lines(f1$mean, lwd = 2, col = "yellow")
+
+# Naive (based on the last value)
+f2 <- rwf(sl_train, h = h)
+lines(f2$mean, lwd = 2, col = "green")
+
+# Drift (based on 1st and last value)
+f3 <- rwf(sl_train, drift = TRUE, h = h)
+lines(f3$mean, lwd = 2, col = "orange")
+
+# Seasonal naive forecast
+f4 <- snaive(sl_train, h = h)
+lines(f4$mean, lwd = 2, col = "blue")
+
+legend("bottomleft", c("Actual", "Mean", "Naive", "Drift", "Seasonal Naive"), lty=c(1,1,1,1,1), lwd=c(1,2,2,2,2), col=c("red","yellow","green","orange","blue"))
+```
+
+### 6.1 Estimations on test datasets
+```{r}
+mapes<-list()
+rmses<-list()
+# display accuracy for mean method
+MAPE(f1$mean, sl_test) 
+RMSE(f1$mean, sl_test)
+mapes <- append(mapes,MAPE(f1$mean, sl_test))
+rmses <- append(rmses,RMSE(f1$mean, sl_test))
+# display accuracy for naive method
+MAPE(f2$mean, sl_test) 
+RMSE(f2$mean, sl_test) 
+mapes <- append(mapes,MAPE(f2$mean, sl_test))
+rmses <- append(rmses,RMSE(f2$mean, sl_test))
+# display accuracy for drift method
+MAPE(f3$mean, sl_test) 
+RMSE(f3$mean, sl_test)
+mapes <- append(mapes,MAPE(f3$mean, sl_test))
+rmses <- append(rmses,RMSE(f3$mean, sl_test))
+# display accuracy for seasonal method (BEST)
+MAPE(f4$mean, sl_test) 
+RMSE(f4$mean, sl_test) 
+mapes <- append(mapes,MAPE(f4$mean, sl_test))
+rmses <- append(rmses,RMSE(f4$mean, sl_test))
+
+rbind(mapes,rmses)
+```
+COMMENT :seasonal naive method is the one that minimizes RMSE on test set with the value of 0.06352969 Our intuition on the seasonal structure of the data has been confirmed by accuracy measures. seasonal naive method is then the best method to use for our prediction task.
+```{r}
+res <- residuals(f4)
+plot(res)
+acf(res, na.action = na.omit)
+
+fit<-tslm(sl_train~trend)
+f<-forecast(fit, h=h)
+plot(f)
+acf(residuals(f))
+
+fit2<-tslm(sl_train~trend+season)
+f2<-forecast(fit2, h=h)
+plot(f2)
+acf(residuals(f2))
+pacf(residuals(f2))
+```
+
 
 ## 7. ARIMAX model
 
@@ -521,35 +591,42 @@ autoplot(wt_el_season, main="Seasonality of monthly water temperature", ylab="wa
 ### 7.1.1 Estimate a time series Y and check the p-value of parameters for ARIMAX model
 
 ARIMAX Equation: $$P_t=c+\beta X+\Phi_1P_{t-1}+\theta_1\epsilon_{t-1}+\epsilon_t $$ where $\epsilon$ is error term, $\Phi_1$ and $\beta_1$ are coefficient parameters, $X$ is the additional term.
-
 ```{r}
-library(lmtest)
 sl_el_trend <- sl_el_fit$time.series[,2]
 at_el_trend <- at_el_fit$time.series[,2] 
 wt_el_trend <- wt_el_fit$time.series[,2]
 
+sl_el_deseasonal <- seasadj(sl_el_fit)
+at_el_deseasonal <- seasadj(at_el_fit)
+wt_el_deseasonal <- seasadj(wt_el_fit)
+```
+
+```{r}
+library(lmtest)
+set.seed(5)
 #length(sl_el_trend)=232
 ## Let P[t-1]=1, c=1, beta=1, Phi_1=1, theta_1=1
-err <- rnorm(n=232, mean = 0, sd = 0.5)
+err <- rnorm(n=232, mean = 0, sd = 1)
 
 #Y_causal <- numeric(3)
 #Y_causal <- 1 + 2*wt_el_trend + 3 * sl_el_trend[1:231] + 4*err[1:231] + err[2:232]
 Y_causal <- numeric(232)
 Y_causal[1] = 1  
 for (i in 2:232) {
-  Y_causal[i] <- 0.1 + 4*wt_el_trend[i] + 0.5 * Y_causal[i-1] + 2*err[i-1] + err[i]
+  Y_causal[i] <- 0.1 + 4*wt_el_deseasonal[i] + 0.5 * Y_causal[i-1] + 2*err[i-1] + err[i]
 }
 
-arimax_causal <- auto.arima(Y_causal, xreg=wt_el_trend)
-arimax_causal_inverse <- auto.arima(wt_el_trend, xreg=Y_causal)
+arimax_causal <- auto.arima(Y_causal, xreg=wt_el_deseasonal,  seasonal = F)
+arimax_causal_inverse <- auto.arima(wt_el_deseasonal, xreg=Y_causal,  seasonal = F)
 
-coeftest(arimax_causal) #ARIMA(1,0,2)
-coeftest(arimax_causal_inverse) #ARIMA(0,1,0)(0,0,1)[12]
+coeftest(arimax_causal) #ARIMA(0,0,2)
+coeftest(arimax_causal_inverse) #ARIMA(2,0,1)
 arimax_causal
 arimax_causal_inverse
 ```
 
 ### 7.2.1 $T_w(t) \rightarrow T_s(t)$
+
 
 $$sea\ level: W(t)=T_s(t)+S_s(t)+R_s(t)$$ $$water\ temp:T_w(t)=T_w(t)+S_w(t)+R_w(t)$$ Finding causal relationship between two sets of time series data $T_s(t),T_w(t)$.
 
@@ -560,6 +637,25 @@ autoplot(sl_el_trend, main="Trend of monthly sea level", ylab="sea level (m)")
 autoplot(at_el_trend, main="Trend of monthly air temperature", ylab="air temp (°C)")
 autoplot(wt_el_trend, main="Trend of monthly water temperature", ylab="water temp (°C)")
 ```
+```{r}
+## Generate the list of A specification of the non-seasonal part of the ARIMA model: the three components (p, d, q)
+generate_orderlist <- function(maxp,maxd,maxq) {
+  len <- (maxp+1)*(maxq+1)*(maxd+1)
+  ll <- matrix(nrow = len, ncol = 3)
+  return (expand.grid(p = 0:maxp, d = 0:maxd, q = 0:maxq))
+}
+
+## ## Calculate MAPE(Mean Absolute Percentage Error)
+mape_cv <- function(err_ts) {
+  return (mean(abs(err_ts), na.rm=T))
+}
+
+## Calculate RMSE(Root Mean Square Error)
+rmse_cv <- function(err_ts) {
+  return (sqrt(mean(err_ts^2, na.rm=T)))
+}
+```
+
 
 ```{r}
 #library(TSA)
@@ -567,30 +663,123 @@ library(forecast)
 #arimax(x, order = c(0, 0, 0), seasonal = list(order = c(0, 0, 0), period = NA),xreg = NULL, include.mean = TRUE, transform.pars = TRUE, fixed = NULL, init = NULL, method = c("CSS-ML", "ML", "CSS"), n.cond, optim.control = list(),kappa = 1e+06, io = NULL, xtransf, transfer = NULL)
 
 
-arimax_w_s_fit <- auto.arima(sl_el_trend, xreg=wt_el_trend)
-arimax_s_w_fit <- auto.arima(wt_el_trend, xreg=sl_el_trend)
+arimax_w_s_fit <- auto.arima(sl_el_deseasonal, xreg=wt_el_deseasonal, seasonal = F)
+arimax_s_w_fit <- auto.arima(wt_el_deseasonal, xreg=sl_el_deseasonal, seasonal = F)
 
-## ARIMAX: ARIMA(2,1,4)
+## ARIMAX: ARIMA(2,0,1), ARIMA(1,1,1)
 coeftest(arimax_w_s_fit)
 coeftest(arimax_s_w_fit)
 
+acf(sl_el_deseasonal)
+acf(sl_el_deseasonal, type="par")
+arimax_orders = generate_orderlist(2,1,2)
+arimax_orders
+```
+
+
+```{r}
+## Fit an ARIMAX model to each rolling origin subset with exogenous predictors
+#far_xreg <- function(x, h, xreg, newxreg) {
+#  forecast(auto.arima(x, xreg=xreg), xreg=newxreg)
+#}
+orders <- list()
+mapes_w_s <- list()
+rmses_w_s <- list()
+for (i in 1:nrow(arimax_orders)) {
+  far2_xreg <- function(x, h, xreg, newxreg) {
+    forecast(Arima(x, order=as.numeric(arimax_orders[i,]), xreg=xreg), xreg=newxreg)
+  }
+  e <- tsCV(sl_el_deseasonal, far2_xreg, h=1, window = 58, xreg=wt_el_deseasonal)
+  w <- paste('(',toString(arimax_orders[i,]),')')
+  orders <- append(orders, w)
+  mapes_w_s <- append(mapes_w_s, mape_cv(e))
+  rmses_w_s <- append(rmses_w_s, rmse_cv(e))
+}
+
+plot(1:18, mapes_w_s, ylim=c(0.03,0.07), type='l', ylab="", xlab="index of ARIMAX model", main="Rolling CV of ARIMAX for T_s(t)~T_w(t)")
+lines(1:18, rmses_w_s, col="red")
+legend("topright", c("MAPE","RMSE"), col = c("black","red"), lty=c(1,1))
+
+rbind(orders,mapes_w_s, rmses_w_s)
+
+## Find monthly average seasonal values for the water temp of training data
+wt_seasonal_est <- tapply(wt_el_season,cycle(wt_el_season),mean)
+## Estimate seasonal data for test dataset: 2018 May - 2023 Feb
+wt_seasonal_test <- c(wt_seasonal_est[5:12], rep(wt_seasonal_est,4), wt_seasonal_est[1:2])
+## Compute the deseasonal test dataset for water temp
+wt_test_deseasonal <- wt_test-wt_seasonal_test
+
+arimax_ws_pred <- forecast(Arima(sl_el_deseasonal, order=c(1,0,0),xreg=wt_el_deseasonal), xreg=wt_test_deseasonal, h=58)
+arimax_ws_pred
+
+## Calculate MAPE(Mean Absolute Percentage Error)
+cat("T_s(s) ~ T_w(t) ARIMAX MAPE: ", MAPE(arimax_ws_pred$mean,sl_test[1:58]),"\n")
+
+## Calculate RMSE(Root Mean Square Error)
+cat("T_s(s) ~ T_w(t) ARIMAX RMSE: ", rmse(arimax_ws_pred$mean,sl_test[1:58]),"\n")
+
+plot(arimax_ws_pred,xlab="Time", ylab="Sea Level(m)", main="ARIMAX model of Sea Level Trend", ylim=c(2,2.3), col='blue')
+lines(sl_test, col='red')
+abline(v=2018.333, lty=2, lwd=2)
+legend("topleft", c("ARIMAX predicted", "Actual"), lty=c(1,1), col=c("blue", "red"), bty="n")
+
+## Using ARIMAX trend model to forecast the sea level
+pred_train1 <- arimax_ws_pred$fitted+sl_el_season
+plot(pred_train1, col="blue", ylim=c(1.8,2.25), ylab="Sea level (m)", main="Forecast sea level by trend ARIMAX model")
+lines(sl_train, col="red")
+legend("topleft", c("ARIMAX predicted", "Actual"), lty=c(1,1), col=c("blue", "red"), bty="n")
+
+## Calculate MAPE(Mean Absolute Percentage Error)
+cat("T_s(s) ~ T_w(t) ARIMAX MAPE for training dataset sea level: ", MAPE(pred_train1,sl_train),"\n")
+
+## Calculate RMSE(Root Mean Square Error)
+cat("T_s(s) ~ T_w(t) ARIMAX RMSE for training dataset sea level: ", rmse(pred_train1,sl_train),"\n")
 ```
 
 ### 7.2.2 $T_a \rightarrow T_s$
+### 7.2.2 Cross-validation for ARIMAX: Rolling Time Series Cross Validation
 
 $$air\ temp:T_a(t)=T_a(t)+S_a(t)+R_a(t)$$ Finding causal relationship between two sets of time series data $T_s(t),T_a(t)$.
 
 Suppose that $T_a(t) \rightarrow T_s(t)$, as same as $T_s(t)$\~$T_a(t)$.
 
 ```{r}
-arimax_a_s_fit <- auto.arima(sl_el_trend, xreg=at_el_trend)
-arimax_s_a_fit <- auto.arima(at_el_trend, xreg=sl_el_trend)
+arimax_a_s_fit <- auto.arima(sl_el_deseasonal, xreg=at_el_deseasonal, seasonal = F)
+arimax_s_a_fit <- auto.arima(at_el_deseasonal, xreg=sl_el_deseasonal, seasonal = F)
 
-## ARIMAX: ARIMA(0,0,2)(0,0,1)[12]
+## ARIMAX: ARIMA(2,0,1), ARIMA(2,1,1)
 coeftest(arimax_a_s_fit)
-coeftest(arimax_s_a_fit) ## ARIMA(1,1,0)(2,0,1)[12]
+coeftest(arimax_s_a_fit) 
 
-arimax_as_pred <- forecast(arimax_a_s_fit, xreg=at_test, h=58)
+#arimax_as_pred <- forecast(arimax_a_s_fit, xreg=at_test, h=58)
+#arimax_as_pred
+
+## CV: Fit an ARIMAX model to each rolling origin subset with exogenous predictors
+mapes_a_s <- list()
+rmses_a_s <- list()
+for (i in 1:nrow(arimax_orders)) {
+  far2_xreg <- function(x, h, xreg, newxreg) {
+    forecast(Arima(x, order=as.numeric(arimax_orders[i,]), xreg=xreg), xreg=newxreg)
+  }
+  e <- tsCV(sl_el_deseasonal, far2_xreg, h=1, window = 58, xreg=at_el_deseasonal)
+  mapes_a_s <- append(mapes_a_s, mape_cv(e))
+  rmses_a_s <- append(rmses_a_s, rmse_cv(e))
+}
+
+plot(1:18, mapes_a_s, ylim=c(0.03, 0.066), type='l', ylab="", xlab="index of ARIMAX model", main="Rolling CV of ARIMAX for T_a(t)~T_w(t)")
+lines(1:18, rmses_a_s, col="red")
+legend("topright", c("MAPE","RMSE"), col = c("black","red"), lty=c(1,1))
+
+rbind(orders,mapes_a_s, rmses_a_s)
+
+## Find monthly average seasonal values for the air temp of training data
+at_seasonal_est <- tapply(at_el_season,cycle(at_el_season),mean)
+## Estimate seasonal data for test dataset: 2018 May - 2023 Feb
+at_seasonal_test <- c(wt_seasonal_est[5:12], rep(wt_seasonal_est,4), at_seasonal_est[1:2])
+## Compute the deseasonal test dataset for water temp
+at_test_deseasonal <- at_test-at_seasonal_test
+
+arimax_as_pred <- forecast(Arima(sl_el_deseasonal, order=c(2,0,1), xreg=at_el_deseasonal), xreg=at_test_deseasonal, h=58)
 arimax_as_pred
 ```
 
@@ -622,12 +811,33 @@ cat("T_s(s) ~ T_a(t) ARIMAX RMSE for training dataset sea level: ", rmse(pred_tr
 ### 7.2.3 $T_a + T_w \rightarrow T_s$
 
 ```{r}
-awt_el_trend <- cbind(at_el_trend,wt_el_trend)
-arimax_aw_s_fit <- auto.arima(sl_el_trend, xreg=awt_el_trend)
-
+awt_el_deseasonal <- cbind(at_el_deseasonal,wt_el_deseasonal)
+arimax_aw_s_fit <- auto.arima(sl_el_deseasonal, xreg=awt_el_deseasonal, seasonal = F)
+## ARIMA(2,0,1)
 coeftest(arimax_aw_s_fit)
 
-arimax_aws_pred <- forecast(arimax_aw_s_fit, xreg=cbind(at_test,wt_test), h=58)
+#arimax_aws_pred <- forecast(arimax_aw_s_fit, xreg=cbind(at_test,wt_test), h=58)
+#arimax_aws_pred
+
+## CV: Fit an ARIMAX model to each rolling origin subset with exogenous predictors
+mapes_aw_s <- list()
+rmses_aw_s <- list()
+for (i in 1:nrow(arimax_orders)) {
+  far2_xreg <- function(x, h, xreg, newxreg) {
+    forecast(Arima(x, order=as.numeric(arimax_orders[i,]), xreg=xreg), xreg=newxreg)
+  }
+  e <- tsCV(sl_el_deseasonal, far2_xreg, h=1, window = 58, xreg=awt_el_deseasonal)
+  mapes_aw_s <- append(mapes_aw_s, mape_cv(e))
+  rmses_aw_s <- append(rmses_aw_s, rmse_cv(e))
+}
+
+plot(1:18, mapes_aw_s, ylim=c(0.03, 0.066), type='l', ylab="", xlab="index of ARIMAX model", main="Rolling CV of ARIMAX for T_w(t)+T_a(t)~T_w(t)")
+lines(1:18, rmses_aw_s, col="red")
+legend("topright", c("MAPE","RMSE"), col = c("black","red"), lty=c(1,1))
+
+rbind(orders,mapes_aw_s, rmses_aw_s)
+
+arimax_aws_pred <- forecast(Arima(sl_el_deseasonal, order=c(1,0,0), xreg=awt_el_deseasonal), xreg=cbind(at_test_deseasonal,wt_test_deseasonal), h=58)
 arimax_aws_pred
 ```
 
@@ -656,16 +866,11 @@ cat("T_s(s) ~ T_a(t)+T_w(t) ARIMAX MAPE for training dataset sea level: ", MAPE(
 cat("T_s(s) ~ T_a(t)+T_w(t) ARIMAX RMSE for training dataset sea level: ", rmse(pred_train3,sl_train),"\n")
 ```
 
+## 8. Linear Regression on sea level trend
 ```{r}
-arimax_as_pred
-arimax_aws_pred
-
-plot(at_test)
-plot(wt_test)
-
-plot(at_el_trend)
-plot(wt_el_trend)
-
-plot(at_el_trend_ts)
-plot(wt_el_trend_ts)
+plot(sl_el_trend)
+abline(reg=lm(sl_el_trend~time(sl_el_trend)), col="red")
+lmfit <- lm(sl_el_trend~time(sl_el_trend))
+lm.slope <- coef(lmfit)[2]
+cat("Sea level yearly increasing ", lm.slope*12," meter.\n")
 ```
